@@ -1,0 +1,246 @@
+
+ 1、步骤一：首先要获得DataSource连接池（推荐使用B方式）:
+要对数据库执行任何的JDBC操作，需要有一个Connection.在Spring中，Connection对象是通过DataSource获得的。
+
+有几种方法可以得到DataSource, 其中一种方法是使用Spring提供的轻量级org.springframework.jdbc.datasource.DriverManagerDataSource，第二种方法是使用org.apache.commons.dbcp.BasicDataSource类。
+
+  A：使用DriverMangerDataSource获取DataSource，这种方法是轻量级的，方便测试
+    public class DataSoureProvider {
+     public static DriverManagerDataSource dataSource = new DriverManagerDataSource();
+ 
+     public static DriverManagerDataSource getInstance() {
+         dataSource.setDriverClassName("com.mysql.jdbc.Driver");
+         dataSource.setUrl("jdbc:mysql://localhost:3306/book");
+         dataSource.setUsername("y****");
+         dataSource.setPassword("h*******");
+         return dataSource;
+     }
+ 
+     @Test
+     public void test() {
+         DataSoureProvider.getInstance();
+         try {
+             dataSource.getConnection();
+         }
+         catch (SQLException e) {
+             e.printStackTrace();
+         }
+     }
+ }
+
+  B：通过使用BasicDataSouce创建一个连接池获取DataSource。应为BasicDataSource所有属性都是通过setter方法暴露在外面的，我们可以像配置其他Srping Bean那样配置它我将数据库连接信息配置在properties文件中，利用spring的org.springframeword.beans.factory.config.PropertyPlaceholderConfigurer类进行读取装载。
+注意：
+使用org.apache.commons.dbcp.BasicDataSource需要引入额外的jar包，分别是,commons-dbcp-1.4.jar,commons-pool-1.2.jar （官网下载页面：http://commons.apache.org/） 
+
+    书写配置文件applicationContext.xml:
+<?xml version="1.0" encoding="UTF-8"?>
+ <beans
+     xmlns="http://www.springframework.org/schema/beans"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xmlns:p="http://www.springframework.org/schema/p"
+     xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-2.5.xsd">
+ 
+     <bean id="dbproperty" class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+         <property name="location">
+             <!-- 此位置是相对于：部署后的项目的根路径
+              <value>/WEB-INF/connect.properties</value> -->
+             <!-- 此位置是相对于：部署后的项目的类路径 -->                <value>connect.properties</value>
+         </property>
+     </bean>
+     <-- 配置BasicDataSource参数，其中<value>中的参数是在connect.propertices配置文件 中拿到的,其实value值也可以直接写上的-->
+     <bean id="myDataSource" class="org.apache.commons.dbcp.BasicDataSource">
+         <property name="driverClassName">
+             <value>${db.driver}</value>
+         </property>
+         <property name="url">
+             <value>${db.url}</value>
+         </property>
+         <property name="username">
+             <value>${db.username}</value>
+         </property>
+         <property name="password">
+             <value>${db.password}</value>
+         </property>
+     </bean>
+ </beans>
+--------------------------------------------------------------------------------------
+
+  2、步骤二：使用JdbcTemplate类操作数据库:
+    Spring把JDBC中重复的操作建立成了一个模板类：org.springframework.jdbc.core.JdbcTemplate。
+   A：要使用JdbcTemplate,需要为每一个DAO配置一个JdbcTemplate实例：
+  public class StudentDaoImp implements StudentDao {
+     private JdbcTemplate jdbcTemplate;
+ 
+     @Override
+     public void setJdbcTemplate(JdbcTemplate jdbcTemplate) {
+         this.jdbcTemplate = jdbcTemplate;
+     }
+ }
+  B：如上，StudentDaoImp内配置了一个JdbcTemplate对象和它对应的setter方法。这样就可以在Spring配置文件中对其进行赋值。
+<?xml version="1.0" encoding="UTF-8"?>
+ <beans xmlns="http://www.springframework.org/schema/beans"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:p="http://www.springframework.org/schema/p"
+     xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-2.5.xsd">
+ 
+     <bean id="dbproperty"
+         class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+         <property name="location">
+             <value>connect.properties</value>
+         </property>
+     </bean>
+ 
+     <bean id="myDataSource" class="org.apache.commons.dbcp.BasicDataSource">
+         <property name="driverClassName">
+             <value>${db.driver}</value>
+         </property>
+         <property name="url">
+             <value>${db.url}</value>
+         </property>
+         <property name="username">
+             <value>${db.username}</value>
+         </property>
+         <property name="password">
+             <value>${db.password}</value>
+         </property>
+     </bean>
+ 
+     <bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
+         <constructor-arg ref="myDataSource"></constructor-arg>
+     </bean>
+    
+     <bean id="studentDao" class="com.sunflower.dao.StudentDaoImp">
+         <property name="jdbcTemplate">
+             <ref bean="jdbcTemplate"/>
+         </property>
+     </bean>
+ </beans>
+  C：使用JdbcTemplate插入数据:
+   
+   1）插入单条数据：JdbcTemplate为我们提供了update(String sql,Object... args)方法，方便我们进行数据的插入.
+   2）批量添加数据：批量插入数据需要用到org.springframework.jdbc.core.BatchPreparedStatementSetter接口。BatchPreparedStatementSetter接口的两个方法，其中getBatchSize()方法是得到需要插入的记录的个数，setValues(PreparedStatement ps, int index)方法是实际进行插入的方法。
+  3）查询单条记录：执行一条数据的查询，需要使用org.springframework.jdbc.core.RowCallbackHandler接口的实现。
+  4）查询多条记录：这里需要用到org.springframework.jdbc.core.RowMapper接口的实现。RowMapper接口负责把Result中的一条记录映射成一个对象。  
+ public class StudentDaoImp implements StudentDao {
+     private JdbcTemplate jdbcTemplate;
+ 
+     @Override
+     public void setJdbcTemplate(JdbcTemplate jdbcTemplate) {
+         this.jdbcTemplate = jdbcTemplate;
+     }
+     //插入单条数据
+     public void insert(Student student)
+     {
+         String sql = "insert into student (cno,name,score) values(?,?,?)";
+         //设置传递给通配符的参数
+         Object[] params = new Object[]{student.getCno(), student.getName(), student.getScore()};
+         jdbcTemplate.update(sql, params);
+     }
+     //批量插入数据
+    public int[] batchInsert(final List<Student> list)
+     {
+         String sql = "insert into student (cno,name,score) values(?,?,?)";
+        
+         BatchPreparedStatementSetter setter = new BatchPreparedStatementSetter() {
+            
+             @Override
+             public void setValues(PreparedStatement ps, int index) throws SQLException {
+                 Student student = (Student) list.get(index);
+                 ps.setInt(1, student.getCno());
+                 ps.setString(2, student.getName());
+                 ps.setDouble(3, student.getScore());
+             }
+            
+             //有多少条记录要处理
+             @Override
+             public int getBatchSize() {
+                 return list.size();
+             }
+         };
+        
+         return jdbcTemplate.batchUpdate(sql, setter);
+     }
+     //查询单条记录
+  
+     public Student getStudent(final int id) {
+         // 装载查询结果
+         final Student student = new Student();
+ 
+         String sql = "select s.cno,s.name,s.score from student s where sno = ?";
+         // 设置查询参数
+         final Object[] params = new Object[] { new Integer(id) };
+         // 进行查询
+         jdbcTemplate.query(sql, params, new RowCallbackHandler() {
+             @Override
+             public void processRow(ResultSet rs) throws SQLException {
+                 student.setCno(rs.getInt("cno"));
+                 student.setName(rs.getString("name"));
+                 student.setScore(rs.getDouble("score"));
+             }
+         });
+        
+         return student;
+     }
+
+    //查询多条记录
+   
+     public List<Student> getAllStudent() {
+         String sql = "select s.cno,s.name,s.score from student s";
+ 
+         return jdbcTemplate.query(sql, new RowMapper<Student>() {
+             @Override
+             public Student mapRow(ResultSet rs, int index) throws SQLException {
+                 Student student = new Student();
+                 student.setCno(rs.getInt("cno"));
+                 student.setName(rs.getString("name"));
+                 student.setScore(rs.getDouble("score"));
+ 
+                 return student;
+             }
+         });
+     }
+
+ }
+
+另附：也可以使用org.springframework.jdbc.core.RowMapper接口查询一条记录，只要附加查询参数即可：
+ 
+     public Student getStudent(final int id) {
+         // 装载查询结果
+         final Student student = new Student();
+ 
+         String sql = "select s.cno,s.name,s.score from student s where sno = ?";
+         // 设置查询参数
+         final Object[] params = new Object[] { new Integer(id) };
+ 
+         List<Student> list = jdbcTemplate.query(sql, params,
+                 new RowMapper<Student>() {
+                     @Override
+                     public Student mapRow(ResultSet rs, int index)
+                             throws SQLException {
+                         Student student = new Student();
+                         student.setCno(rs.getInt("cno"));
+                         student.setName(rs.getString("name"));
+                         student.setScore(rs.getDouble("score"));
+ 
+                         return student;
+                     }
+                 });
+        
+         return list.get(0);
+     }
+
+
+二、采用注解方式配置事务处理
+   1、在Spring配置文件beans元素中添加子元素：
+  <!– 声明事务管理器 -->   
+ <bean id="txManager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+      <property name="dataSource" ref="dataSource"/>
+  </bean>
+ <!– 采用@Transactional注解方式使用事务  -->
+  <tx:annotation-driven transaction-manager="txManager"/>
+
+  2、在业务逻辑的试下类中使用注解添加相应的事务
+   @Service @Transactional
+public class StudentServiceBean implements StudentService {
+@Transactional(类型=值)
+public void add(Student stu) {
+    dao.insert(stu);
